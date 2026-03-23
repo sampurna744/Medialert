@@ -98,7 +98,14 @@ class MainActivity : ComponentActivity() {
                             MedicineScreen()
                         }
                         composable("profile") {
-                            ProfileScreen(onEditClick = { /* Handle edit logic */ })
+                            ProfileScreen(
+                                onEditClick = { /* Handle edit logic */ },
+                                onLogoutClick = {
+                                    navController.navigate("signin") {
+                                        popUpTo(0) { inclusive = true }
+                                    }
+                                }
+                            )
                         }
                         composable("about") {
                             AboutUsScreen()
