@@ -2,13 +2,17 @@ package np.com.sampurnasimkhada.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -18,7 +22,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.filter
 import np.com.sampurnasimkhada.ui.theme.*
+
+import np.com.sampurnasimkhada.util.DATE_FMT
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+import kotlin.math.abs
 
 // ── Top bar ───────────────────────────────────────────────
 
@@ -194,6 +205,178 @@ fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Uni
                 checkedTrackColor  = Primary,
                 uncheckedThumbColor = Color.White,
                 uncheckedTrackColor = TextMuted,
+            ),
+        )
+    }
+}
+
+// ── Wheel / drum-roll picker ──────────────────────────────
+//
+// Uses phantom (empty) items at each end instead of contentPadding so that
+// rememberSnapFlingBehavior always snaps cleanly and
+// firstVisibleItemIndex == selectedDataIndex after every snap.
+
+@Composable
+fun WheelPicker(
+    items: List<String>,
+    selectedIndex: Int,
+    onIndexChanged: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val itemHeight = 44.dp
+    val visibleCount = 5
+    val halfCount = visibleCount / 2   // 2
+
+    // Padded list: [phantom, phantom, data..., phantom, phantom]
+    // firstVisibleItemIndex 0 → data[0] centred; index 1 → data[1] centred, etc.
+    val paddedItems = remember(items) {
+        List(halfCount) { null } + items.map { it } + List(halfCount) { null }
+    }
+
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = selectedIndex.coerceIn(0, items.lastIndex),
+    )
+    val flingBehavior = rememberSnapFlingBehavior(listState)
+
+    // Live centred index during scrolling (for colour/weight animation)
+    val centredDataIndex by remember {
+        derivedStateOf { listState.firstVisibleItemIndex.coerceIn(0, items.lastIndex) }
+    }
+
+    // Sync scroll when selectedIndex changes externally (loadForEdit)
+    LaunchedEffect(selectedIndex) {
+        if (!listState.isScrollInProgress) {
+            listState.animateScrollToItem(selectedIndex.coerceIn(0, items.lastIndex))
+        }
+    }
+
+    // Report selected index each time the user's scroll settles
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { !it }
+            .collect {
+                val idx = listState.firstVisibleItemIndex.coerceIn(0, items.lastIndex)
+                if (idx != selectedIndex) onIndexChanged(idx)
+            }
+    }
+
+    Box(
+        modifier = modifier.height(itemHeight * visibleCount),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Selection highlight bar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(itemHeight)
+                .background(Primary.copy(alpha = 0.13f), RoundedCornerShape(10.dp))
+                .border(1.dp, Primary.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
+        )
+
+        LazyColumn(
+            state = listState,
+            flingBehavior = flingBehavior,
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            itemsIndexed(paddedItems) { paddedIdx, item ->
+                val distance = abs(paddedIdx - (centredDataIndex + halfCount))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(itemHeight),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (item != null) {
+                        Text(
+                            text = item,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (distance == 0) FontWeight.Bold else FontWeight.Normal,
+                            color = when (distance) {
+                                0    -> Primary
+                                1    -> TextSecondary.copy(alpha = 0.6f)
+                                else -> TextMuted.copy(alpha = 0.22f)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Time picker dialog ────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TimePickerDialog(
+    initialHour: Int = 8,
+    initialMinute: Int = 0,
+    onDismiss: () -> Unit,
+    onConfirm: (hour: Int, minute: Int) -> Unit,
+) {
+    val state = rememberTimePickerState(
+        initialHour = initialHour,
+        initialMinute = initialMinute,
+        is24Hour = false,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = { onConfirm(state.hour, state.minute) }) {
+                Text("OK", color = Primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) }
+        },
+        text = { TimePicker(state = state) },
+        containerColor = BgSurface,
+    )
+}
+
+// ── Date picker dialog ────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MediDatePickerDialog(
+    initialDateStr: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val initialMillis = runCatching {
+        LocalDate.parse(initialDateStr, DATE_FMT)
+            .atStartOfDay()
+            .toInstant(ZoneOffset.UTC)
+            .toEpochMilli()
+    }.getOrDefault(System.currentTimeMillis())
+
+    val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                val millis = state.selectedDateMillis ?: return@TextButton
+                val date = Instant.ofEpochMilli(millis)
+                    .atZone(ZoneOffset.UTC)
+                    .toLocalDate()
+                    .format(DATE_FMT)
+                onConfirm(date)
+            }) {
+                Text("OK", color = Primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = TextMuted) }
+        },
+    ) {
+        DatePicker(
+            state = state,
+            colors = DatePickerDefaults.colors(
+                containerColor = BgSurface,
+                selectedDayContainerColor = Primary,
+                todayDateBorderColor = Primary,
             ),
         )
     }
