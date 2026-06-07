@@ -42,4 +42,5 @@ class SettingsViewModel(private val repo: SettingsRepository) : ViewModel() {
     fun setNotifications(v: Boolean)    { viewModelScope.launch { repo.setNotificationsEnabled(v) } }
     fun setSnooze(minutes: Int)         { viewModelScope.launch { repo.setSnoozeMinutes(minutes) } }
     fun setSound(v: Boolean)            { viewModelScope.launch { repo.setSoundEnabled(v) } }
+    fun setAlarmSoundUri(uri: String)   { viewModelScope.launch { repo.setAlarmSoundUri(uri) } }
 }
