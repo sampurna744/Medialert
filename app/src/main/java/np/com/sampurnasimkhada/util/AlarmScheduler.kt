@@ -20,65 +20,27 @@ class AlarmScheduler(private val context: Context) {
         private const val TAG = "AlarmScheduler"
     }
 
-    /**
-     * Schedule one exact alarm per time slot for this medicine.
-     * Each alarm is one-shot; AlarmReceiver reschedules it for the
-     * following day after firing — this is the only reliable way to
-     * get both exact timing and daily repetition on modern Android.
-     */
     fun scheduleAlarmsForMedicine(medicine: MedicineEntity) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) {
-                Log.w(TAG, "Exact alarm permission not granted — skipping schedule for ${medicine.name}")
-                return
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+            Log.w(TAG, "Exact alarm permission not granted — skipping ${medicine.name}")
+            return
         }
 
-        val times = medicine.times.split(",").map { it.trim() }
         val today = LocalDate.now()
-
-        times.forEachIndexed { index, timeStr ->
+        medicine.times.split(",").map { it.trim() }.forEachIndexed { index, timeStr ->
             try {
                 val time = LocalTime.parse(timeStr, DateTimeFormatter.ofPattern("HH:mm"))
-                var scheduledDateTime = LocalDateTime.of(today, time)
+                var scheduledAt = LocalDateTime.of(today, time)
+                if (scheduledAt.isBefore(LocalDateTime.now())) scheduledAt = scheduledAt.plusDays(1)
 
-                if (scheduledDateTime.isBefore(LocalDateTime.now())) {
-                    scheduledDateTime = scheduledDateTime.plusDays(1)
-                }
-
-                // createPendingIntent returns non-null (FLAG_UPDATE_CURRENT)
-                val pendingIntent: PendingIntent = createPendingIntent(medicine, index)
-
-                val triggerAtMillis = scheduledDateTime
-                    .atZone(ZoneId.systemDefault())
-                    .toInstant()
-                    .toEpochMilli()
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                }
-
-                Log.d(TAG, "Scheduled alarm for ${medicine.name} at $scheduledDateTime (slot $index)")
+                scheduleExact(createPendingIntent(medicine, index), scheduledAt)
+                Log.d(TAG, "Scheduled ${medicine.name} at $scheduledAt (slot $index)")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to schedule alarm for ${medicine.name} slot $index", e)
+                Log.e(TAG, "Failed to schedule ${medicine.name} slot $index", e)
             }
         }
     }
 
-    /**
-     * Called by AlarmReceiver after each alarm fires to push the
-     * trigger forward by exactly one day.
-     */
     fun scheduleNextDay(
         medicineId: Long,
         medicineName: String,
@@ -86,59 +48,42 @@ class AlarmScheduler(private val context: Context) {
         times: String,
         slotIndex: Int,
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (!alarmManager.canScheduleExactAlarms()) return
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) return
 
         try {
             val timeStr = times.split(",").map { it.trim() }.getOrNull(slotIndex) ?: return
             val time = LocalTime.parse(timeStr, DateTimeFormatter.ofPattern("HH:mm"))
             val tomorrow = LocalDateTime.of(LocalDate.now().plusDays(1), time)
 
-            // Build a fresh non-null PendingIntent directly (no medicine entity here)
-            val intent = buildAlarmIntent(medicineId, medicineName, medicineDosage, times, slotIndex)
-            val pendingIntent: PendingIntent = PendingIntent.getBroadcast(
+            val pendingIntent = PendingIntent.getBroadcast(
                 context,
                 (medicineId * 100 + slotIndex).toInt(),
-                intent,
+                buildAlarmIntent(medicineId, medicineName, medicineDosage, times, slotIndex),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )!!
 
-            val triggerAtMillis = tomorrow
-                .atZone(ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli()
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            } else {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-            }
-
-            Log.d(TAG, "Rescheduled $medicineName slot $slotIndex for tomorrow at $tomorrow")
+            scheduleExact(pendingIntent, tomorrow)
+            Log.d(TAG, "Rescheduled $medicineName slot $slotIndex for $tomorrow")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to reschedule next day for medicineId=$medicineId slot=$slotIndex", e)
         }
     }
 
     fun cancelAlarmsForMedicine(medicine: MedicineEntity) {
-        val times = medicine.times.split(",")
-        times.forEachIndexed { index, _ ->
-            // findPendingIntent uses FLAG_NO_CREATE — returns null if no alarm registered
-            val pendingIntent: PendingIntent? = findPendingIntent(medicine, index)
-            if (pendingIntent != null) {
-                alarmManager.cancel(pendingIntent)
-                Log.d(TAG, "Cancelled alarm for ${medicine.name} slot $index")
-            }
+        medicine.times.split(",").forEachIndexed { index, _ ->
+            findPendingIntent(medicine, index)?.let { alarmManager.cancel(it) }
         }
     }
 
-    // ── PendingIntent helpers ─────────────────────────────────────────────────
+    private fun scheduleExact(pendingIntent: PendingIntent, at: LocalDateTime) {
+        val triggerMillis = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, pendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerMillis, pendingIntent)
+        }
+    }
 
-    /**
-     * Create (or update) a PendingIntent for scheduling.
-     * FLAG_UPDATE_CURRENT guarantees a non-null return — the !! is safe.
-     */
     private fun createPendingIntent(medicine: MedicineEntity, slotIndex: Int): PendingIntent =
         PendingIntent.getBroadcast(
             context,
@@ -147,10 +92,6 @@ class AlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )!!
 
-    /**
-     * Look up an existing PendingIntent without creating one.
-     * FLAG_NO_CREATE returns null if the alarm was never registered.
-     */
     private fun findPendingIntent(medicine: MedicineEntity, slotIndex: Int): PendingIntent? =
         PendingIntent.getBroadcast(
             context,
@@ -159,7 +100,6 @@ class AlarmScheduler(private val context: Context) {
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
 
-    /** Shared intent builder so schedule / cancel / reschedule all produce identical intents. */
     private fun buildAlarmIntent(
         medicineId: Long,
         medicineName: String,

@@ -42,6 +42,8 @@
             <intent-filter android:priority="999">
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="np.com.sampurnasimkhada.STOP_ALARM" />
+                <action android:name="np.com.sampurnasimkhada.MARK_TAKEN" />
             </intent-filter>
         </receiver>
 
