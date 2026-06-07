@@ -51,6 +51,11 @@ interface DoseLogDao {
     @Query("DELETE FROM dose_logs WHERE medicineId = :medicineId")
     suspend fun deleteLogsForMedicine(medicineId: Long)
 
+    /** Remove only UPCOMING (not yet acted-on) slots for a medicine on a given date.
+     *  Called before reseeding when the user edits a medicine's schedule. */
+    @Query("DELETE FROM dose_logs WHERE medicineId = :medicineId AND scheduledDate = :date AND status = 'UPCOMING'")
+    suspend fun deleteUpcomingLogsForDate(medicineId: Long, date: String)
+
     /** Remove logs older than a given date (for periodic cleanup). */
     @Query("DELETE FROM dose_logs WHERE scheduledDate < :beforeDate")
     suspend fun deleteOldLogs(beforeDate: String)

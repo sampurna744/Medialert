@@ -151,11 +151,14 @@ class MedicineRepository(
     suspend fun deleteOldLogs(beforeDate: String) =
         doseLogDao.deleteOldLogs(beforeDate)
 
-    /**
-     * Delete all doses for a specific medicine.
-     */
     suspend fun deleteDosesForMedicine(medicineId: Long) =
         doseLogDao.deleteLogsForMedicine(medicineId)
+
+    /** Delete only UPCOMING slots for a medicine on a given date, then reseed with new times. */
+    suspend fun reseedDoseSlotsForDate(medicineId: Long, times: List<String>, date: String) {
+        doseLogDao.deleteUpcomingLogsForDate(medicineId, date)
+        seedDoseSlotsForToday(medicineId, times, date)
+    }
 
     /** Alias used by ViewModels */
     suspend fun updateDoseStatus(medicineId: Long, date: String, time: String, status: String) =
